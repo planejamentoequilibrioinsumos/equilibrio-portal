@@ -2,53 +2,128 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover"
-  >
-
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Equilíbrio Portal</title>
-  
-<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-<link rel="manifest" href="manifest.json?v=2">
-
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Equilíbrio">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+  <link rel="manifest" href="manifest.json?v=3">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Equilíbrio">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#123f2b">
-</head>
-
-<body>
-
-  <iframe
-    src="https://script.google.com/macros/s/AKfycbzJPgDtWQmXvCk0ZUe73EmW5SyMCja0yUfAMPNslFckofw__hs33u3dMqNY--CpUy_t/exec"
-    title="Equilíbrio Portal"
-    allow="fullscreen"
-  ></iframe>
-
+  <script src="push-config.js?v=1"></script>
   <style>
-    html,
-    body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: #f2f6f3;
-    }
-
-    iframe {
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      border: 0;
-      display: block;
-    }
+    html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#f2f6f3;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    iframe{position:fixed;inset:0;width:100%;height:100%;border:0;display:block}
+    #pushEnable{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:max(18px,calc(env(safe-area-inset-bottom) + 12px));z-index:50;border:0;border-radius:999px;background:#123f2b;color:#fff;padding:12px 16px;font-weight:800;font-size:13px;box-shadow:0 10px 28px rgba(18,63,43,.24);display:none;align-items:center;gap:8px}
+    #pushEnable.show{display:inline-flex}
+    #pushEnable:disabled{opacity:.65}
+    #pushStatus{position:fixed;left:14px;right:14px;bottom:max(18px,calc(env(safe-area-inset-bottom) + 12px));z-index:49;margin:auto;max-width:520px;padding:11px 14px;border-radius:12px;background:#18261e;color:#fff;font-size:12px;box-shadow:0 10px 28px rgba(18,63,43,.20);display:none}
+    #pushStatus.show{display:block}
   </style>
+</head>
+<body>
+  <iframe id="portalFrame"
+    src="https://script.google.com/macros/s/AKfycbzJPgDtWQmXvCk0ZUe73EmW5SyMCja0yUfAMPNslFckofw__hs33u3dMqNY--CpUy_t/exec"
+    title="Equilíbrio Portal" allow="fullscreen"></iframe>
+  <button id="pushEnable" type="button" aria-label="Ativar notificações">🔔 Ativar notificações</button>
+  <div id="pushStatus" role="status"></div>
 
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+    import { getMessaging, getToken, onMessage } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging.js';
+
+    const frame=document.getElementById('portalFrame');
+    const button=document.getElementById('pushEnable');
+    const status=document.getElementById('pushStatus');
+    const cfg=self.EQUILIBRIO_PUSH_CONFIG||{};
+    let portalOrigin='';
+    let authenticated=false;
+    let registration=null;
+    let messaging=null;
+    let currentToken='';
+
+    function configured(){
+      const f=cfg.firebase||{};
+      return Boolean(f.apiKey&&f.projectId&&f.messagingSenderId&&f.appId&&cfg.vapidKey&&
+        !Object.values(f).some(v=>String(v||'').includes('PREENCHER'))&&String(cfg.vapidKey).indexOf('PREENCHER')<0);
+    }
+    function post(type,payload){
+      if(!frame.contentWindow||!portalOrigin)return;
+      frame.contentWindow.postMessage(Object.assign({source:'EQUILIBRIO_PWA',type},payload||{}),portalOrigin);
+    }
+    function toast(msg,error){
+      status.textContent=msg;status.style.background=error?'#733b3b':'#18261e';status.classList.add('show');
+      clearTimeout(toast.timer);toast.timer=setTimeout(()=>status.classList.remove('show'),5000);
+    }
+    function standalone(){return matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;}
+    function refreshButton(){
+      if(!configured()||!authenticated||!('Notification' in window)||!('serviceWorker' in navigator)){button.classList.remove('show');return;}
+      if(Notification.permission==='default')button.classList.add('show');else button.classList.remove('show');
+    }
+    async function prepareFirebase(){
+      if(!configured())return false;
+      registration=await navigator.serviceWorker.register('./firebase-messaging-sw.js',{scope:'./'});
+      const app=initializeApp(cfg.firebase);
+      messaging=getMessaging(app);
+      onMessage(messaging,async payload=>{
+        const data=payload&&payload.data?payload.data:{};
+        if(data.tipo!=='COMUNICADO'||!registration)return;
+        await registration.showNotification(data.title||'Comunicado da gestão',{
+          body:data.body||'Há um novo comunicado no Portal Comercial.',icon:'./icon-192.png',badge:'./icon-192.png',
+          tag:'equilibrio-comunicado-'+(data.notificationId||Date.now()),renotify:true,
+          requireInteraction:data.prioridade==='IMPORTANTE',data:{url:data.url||'./',notificationId:data.notificationId||''}
+        });
+      });
+      return true;
+    }
+    async function resolveToken(){
+      if(!messaging||!registration||Notification.permission!=='granted')return '';
+      currentToken=await getToken(messaging,{vapidKey:cfg.vapidKey,serviceWorkerRegistration:registration});
+      if(currentToken&&authenticated)post('EQUILIBRIO_PUSH_TOKEN',{token:currentToken,meta:{userAgent:navigator.userAgent,standalone:standalone(),idioma:navigator.language||''}});
+      return currentToken;
+    }
+
+    let readyPromise=prepareFirebase().catch(err=>{console.error('Push init',err);return false;});
+    window.addEventListener('message',async event=>{
+      if(event.source!==frame.contentWindow)return;
+      const data=event.data||{};if(data.source!=='EQUILIBRIO_PORTAL')return;
+      portalOrigin=event.origin;
+      if(data.type==='EQUILIBRIO_AUTH'){
+        authenticated=Boolean(data.authenticated);refreshButton();
+        if(authenticated&&Notification.permission==='granted'){
+          await readyPromise;try{await resolveToken();}catch(err){console.error(err);}
+        }
+      }else if(data.type==='EQUILIBRIO_PUSH_REQUEST_STATE'){
+        if(Notification.permission==='granted'){
+          await readyPromise;try{await resolveToken();}catch(err){console.error(err);}
+        }
+        refreshButton();
+      }else if(data.type==='EQUILIBRIO_PUSH_REGISTERED'){
+        if(data.ok){button.classList.remove('show');toast('Notificações ativadas neste aparelho.');}
+        else toast(data.error||'Não foi possível vincular as notificações.',true);
+      }
+    });
+
+    button.addEventListener('click',async()=>{
+      button.disabled=true;
+      try{
+        if(!configured())throw new Error('Firebase ainda não configurado.');
+        const isiOS=/iPhone|iPad|iPod/i.test(navigator.userAgent);
+        if(isiOS&&!standalone())throw new Error('No iPhone, abra o Portal pelo ícone adicionado à Tela de Início para ativar notificações.');
+        const permission=await Notification.requestPermission();
+        post('EQUILIBRIO_PUSH_PERMISSION',{permission});
+        if(permission!=='granted')throw new Error('Permissão de notificações não concedida.');
+        await readyPromise;
+        const token=await resolveToken();
+        if(!token)throw new Error('O aparelho não retornou um token de notificação.');
+        button.classList.remove('show');
+      }catch(err){toast(err.message||String(err),true);refreshButton();}
+      finally{button.disabled=false;}
+    });
+
+    window.addEventListener('focus',refreshButton);
+  </script>
 </body>
 </html>
