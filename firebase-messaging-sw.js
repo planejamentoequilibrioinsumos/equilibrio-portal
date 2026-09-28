@@ -1,5 +1,5 @@
 /* Service Worker do Portal Equilíbrio — push somente para comunicados da gestão. */
-importScripts('./push-config.js');
+importScripts('./push-config.js?v=2');
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js');
 
