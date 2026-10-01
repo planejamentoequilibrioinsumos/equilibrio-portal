@@ -44,6 +44,10 @@
     let registration=null;
     let messaging=null;
     let currentToken='';
+    const activationNoticeKey='equilibrio_push_activation_notice_v1';
+    let activationNoticePending=false;
+    let activationNoticeShown=false;
+    try{activationNoticeShown=localStorage.getItem(activationNoticeKey)==='1';}catch(ignore){}
 
     function configured(){
       const f=cfg.firebase||{};
@@ -103,8 +107,15 @@
         }
         refreshButton();
       }else if(data.type==='EQUILIBRIO_PUSH_REGISTERED'){
-        if(data.ok){button.classList.remove('show');toast('Notificações ativadas neste aparelho.');}
-        else toast(data.error||'Não foi possível vincular as notificações.',true);
+        if(data.ok){
+          button.classList.remove('show');
+          if(activationNoticePending&&!activationNoticeShown)toast('Notificações ativadas neste aparelho.');
+          activationNoticePending=false;activationNoticeShown=true;
+          try{localStorage.setItem(activationNoticeKey,'1');}catch(ignore){}
+        }else{
+          activationNoticePending=false;
+          toast(data.error||'Não foi possível vincular as notificações.',true);
+        }
       }
     });
 
@@ -114,14 +125,16 @@
         if(!configured())throw new Error('Firebase ainda não configurado.');
         const isiOS=/iPhone|iPad|iPod/i.test(navigator.userAgent);
         if(isiOS&&!standalone())throw new Error('No iPhone, abra o Portal pelo ícone adicionado à Tela de Início para ativar notificações.');
+        const previousPermission=Notification.permission;
         const permission=await Notification.requestPermission();
         post('EQUILIBRIO_PUSH_PERMISSION',{permission});
         if(permission!=='granted')throw new Error('Permissão de notificações não concedida.');
+        activationNoticePending=previousPermission!=='granted'&&!activationNoticeShown;
         await readyPromise;
         const token=await resolveToken();
         if(!token)throw new Error('O aparelho não retornou um token de notificação.');
         button.classList.remove('show');
-      }catch(err){toast(err.message||String(err),true);refreshButton();}
+      }catch(err){activationNoticePending=false;toast(err.message||String(err),true);refreshButton();}
       finally{button.disabled=false;}
     });
 
